@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -493,5 +494,97 @@ func TestFlagValue(t *testing.T) {
 			got := flagValue(test.flags, test.flagName)
 			qt.Assert(t, qt.DeepEquals(got, test.want))
 		})
+	}
+}
+
+func TestRuntimeFuncIDBuiltinSymbols(t *testing.T) {
+	for _, name := range []string{
+		"abort", "asmcgocall", "asyncPreempt", "cgocallback", "corostart",
+		"debugCallV2", "deferreturn", "gcBgMarkWorker", "goexit", "gogo",
+		"gopanic", "handleAsyncEvent", "main", "mcall", "morestack", "mstart",
+		"panicwrap", "rt0_go", "runCleanups", "runFinalizers", "sigpanic",
+		"systemstack", "systemstack_switch",
+	} {
+		if !slices.Contains(builtinSymbols["runtime"], name) {
+			t.Errorf("runtime.%s must be included in the assembler symbol map", name)
+		}
+	}
+}
+
+func TestRuntimeGoexitToolchainDependency(t *testing.T) {
+	if !isToolchainNameDependency("runtime", "goexit") {
+		t.Fatal("runtime.goexit must keep its assembly name for runtime stack metadata")
+	}
+	if !slices.Contains(builtinSymbols["runtime"], "goexit") {
+		t.Fatal("runtime.goexit must be included in the linker symbol map")
+	}
+}
+
+func TestRuntimeAddmoduledataBuiltinSymbol(t *testing.T) {
+	if !slices.Contains(builtinSymbols["runtime"], "addmoduledata") {
+		t.Fatal("runtime.addmoduledata must be included in the linker symbol map")
+	}
+}
+
+func TestRuntimeModuledataBuiltinSymbol(t *testing.T) {
+	for _, name := range []string{"moduledata", "modulehash"} {
+		if !slices.Contains(builtinSymbols["runtime"], name) {
+			t.Errorf("runtime.%s must be included in the linker symbol map", name)
+		}
+	}
+}
+
+func TestRuntimeAsmcgocallLandingpadBuiltinSymbol(t *testing.T) {
+	if !slices.Contains(builtinSymbols["runtime"], "asmcgocall_landingpad") {
+		t.Fatal("runtime.asmcgocall_landingpad must be included in the assembler symbol map")
+	}
+}
+
+func TestRuntimeBuiltinSymbolsExcludeNonSymbolLiterals(t *testing.T) {
+	for _, name := range []string{"elf_", "go", "retpoline", "test"} {
+		if slices.Contains(builtinSymbols["runtime"], name) {
+			t.Errorf("runtime.%s is not a complete symbol name", name)
+		}
+	}
+}
+
+func TestRuntimeGeneratedLinkerSymbols(t *testing.T) {
+	for _, name := range []string{"buildVersion", "modinfo", "unreachableMethod"} {
+		if !slices.Contains(builtinSymbols["runtime"], name) {
+			t.Errorf("runtime.%s must be included in the linker symbol map", name)
+		}
+	}
+}
+
+func TestStructsHostLayoutToolchainDependency(t *testing.T) {
+	if !isToolchainNameDependency("structs", "HostLayout") {
+		t.Fatal("structs.HostLayout must keep its name for go:wasmimport validation")
+	}
+}
+
+func TestReplaceGoAsmNamesPreservesOtherIdentifiers(t *testing.T) {
+	nameMap := map[string]string{
+		"asm__size": "obfuscated__size",
+		"wasm_pc":   "obfuscated_pc",
+	}
+	input := "#include \"garbled_asm_ppc64x.h\"\nMOVD $asm__size, R3\nCall wasm_pc_f_loop(SB)\nMOVD $wasm_pc, R4\n"
+	want := "#include \"garbled_asm_ppc64x.h\"\nMOVD $obfuscated__size, R3\nCall wasm_pc_f_loop(SB)\nMOVD $obfuscated_pc, R4\n"
+	if got := replaceGoAsmNames(input, nameMap); got != want {
+		t.Fatalf("replaceGoAsmNames() = %q, want %q", got, want)
+	}
+}
+
+func TestReverseContentPreservesRuntimeFrames(t *testing.T) {
+	const input = "runtime.main()\n	runtime/proc.go:1 +0x1\nruntime.goexit()\n	runtime/asm_amd64.s:1 +0x1\n"
+	var out strings.Builder
+	modified, err := reverseContent(&out, strings.NewReader(input), strings.NewReplacer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modified {
+		t.Fatal("reverseContent reported a modification without a matching replacement")
+	}
+	if got := out.String(); got != input {
+		t.Fatalf("reverseContent removed runtime frames:\n%s", got)
 	}
 }

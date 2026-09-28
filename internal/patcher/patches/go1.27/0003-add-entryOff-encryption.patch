@@ -1,9 +1,11 @@
-From 40a662f6bddd449b3b4026611e4058e14e5f541c Mon Sep 17 00:00:00 2001
+From 0b457fcaa4985fbb83c856e918771afc1b33456d Mon Sep 17 00:00:00 2001
 From: Paul Scheduikat <luantak@pm.me>
 Date: Thu, 3 Sep 2026 08:57:04 +0000
 Subject: [PATCH 3/4] add entryOff encryption
 
-Encrypt pclntab entry offsets with the per-build key supplied by Garble, keeping linker output symmetric with the runtime-side decoding performed in transformed programs.
+Encrypt pclntab entry offsets with the per-build key supplied by Garble,
+keeping linker output symmetric with the runtime-side decoding performed
+in transformed programs.
 ---
  cmd/link/internal/ld/pcln.go | 20 ++++++++++++++++++++
  1 file changed, 20 insertions(+)

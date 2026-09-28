@@ -1,9 +1,11 @@
-From c033bb46f8b9d4c467633b496c9ce05b76347a26 Mon Sep 17 00:00:00 2001
+From 820a3529d90d9cd710b490850828ed8f825f9d43 Mon Sep 17 00:00:00 2001
 From: Paul Scheduikat <luantak@pm.me>
 Date: Thu, 3 Sep 2026 08:57:04 +0000
 Subject: [PATCH 2/4] add unexported function name removing
 
-Teach the linker to replace unexported function names in tiny mode while preserving the runtime names and metadata identities that the Go runtime must still recognize.
+Teach the linker to replace unexported function names in tiny mode while
+preserving the runtime names and metadata identities that the Go runtime
+must still recognize.
 ---
  cmd/link/internal/ld/pcln.go | 98 +++++++++++++++++++++++++++++++++++-
  1 file changed, 97 insertions(+), 1 deletion(-)

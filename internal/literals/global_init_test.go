@@ -81,3 +81,63 @@ var live = "another independently initialized string"
 		})
 	}
 }
+
+func TestGlobalAggregateLiteralProxyOwnership(t *testing.T) {
+	for _, obf := range Obfuscators {
+		t.Run(fmt.Sprintf("%T", obf), func(t *testing.T) {
+			fset := token.NewFileSet()
+			long := ""
+			for range 100 {
+				long += "an oversized concatenation operand "
+			}
+			long = long[:MaxSize]
+			file, err := parser.ParseFile(fset, "global.go", fmt.Sprintf(`package globals
+type record struct { Text string; Count int; Nested [2]string }
+var dead = [...]record{{Text: "an independently removable aggregate", Count: 3, Nested: [2]string{1: "a nested string constant"}}}
+var live = record{"another eagerly initialized aggregate", 4, [2]string{"nested live string constant", "short"}}
+var side = record{Text: effect()}
+var reference = [1]string{live.Text}
+var slice = []string{"not a certified slice global"}
+var pointer = &record{Text: "not a certified pointer global"}
+type namedString string
+var named = struct{ Text string; Named namedString }{"an aggregate with a named conversion", namedString("a named conversion operand must stay obfuscated")}
+var dependency = [1]string{string(make([]byte, len(reference)))}
+var unevaluated = [1]int{len([1]string{live.Text})}
+var oversized = [2]string{"an eligible small string", string(%q) + string(%q)}
+func effect() string { return "a user call is not pure" }
+`, long, long), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info := &types.Info{Types: make(map[ast.Expr]types.TypeAndValue), Defs: make(map[*ast.Ident]types.Object), Uses: make(map[*ast.Ident]types.Object)}
+			if _, err := new(types.Config).Check("globals", fset, []*ast.File{file}, info); err != nil {
+				t.Fatal(err)
+			}
+			old := testPkgToObfuscatorMap
+			testPkgToObfuscatorMap = map[string]obfuscator{"globals": obf}
+			defer func() { testPkgToObfuscatorMap = old }()
+			file, inits := ObfuscateWithGlobalInits(rand.New(rand.NewSource(1)), file, info, nil, func(r *rand.Rand, base string) string { return fmt.Sprintf("hidden_%s_%x", base, r.Uint64()) })
+			if len(inits) != 3 || inits[0].Global.Name != "dead" || inits[1].Global.Name != "live" || inits[2].Global.Name != "oversized" || inits[0].Factory == inits[1].Factory {
+				t.Fatalf("aggregates lack exclusive certificates: %v", inits)
+			}
+			if _, err := new(types.Config).Check("globals", fset, []*ast.File{file}, nil); err != nil {
+				t.Fatal(err)
+			}
+			ast.Inspect(file, func(node ast.Node) bool {
+				if lit, ok := node.(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == fmt.Sprintf("%q", long) {
+					t.Error("oversized concatenation operands lost their obfuscation")
+				}
+				return true
+			})
+			for _, init := range inits {
+				for _, decl := range file.Decls {
+					if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == init.Factory {
+						if len(fn.Body.List) < 2 {
+							t.Fatal("aggregate factory lost its local proxy roots")
+						}
+					}
+				}
+			}
+		})
+	}
+}

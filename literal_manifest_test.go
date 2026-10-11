@@ -30,14 +30,15 @@ func TestLiteralInitLargePackage(t *testing.T) {
 	for i := range 6000 {
 		fmt.Fprintf(&source, "var Global%06d = %q\n", i, fmt.Sprintf("large package constant value %06d", i))
 	}
-	source.WriteString("func main() { println(Global000000); println(imported.Live) }\n")
+	source.WriteString("var AggregateLive = [2]string{\"live main aggregate string\"}\nvar AggregateDead = [2]string{\"dead main aggregate string\"}\n")
+	source.WriteString("func main() { if AggregateLive[0] != \"live main aggregate string\" || imported.AggregateLive.Text != \"live imported aggregate string\" { panic(\"aggregate init removed\") }; println(Global000000); println(imported.Live) }\n")
 	if err := os.Mkdir(filepath.Join(dir, "imported"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	for name, data := range map[string]string{
 		"go.mod":               "module example.com/large\n\ngo 1.27\n",
 		"main.go":              source.String(),
-		"imported/imported.go": "package imported\nvar Live = \"live imported string global\"\nvar Dead = \"dead imported string global\"\n",
+		"imported/imported.go": "package imported\nvar Live = \"live imported string global\"\nvar Dead = \"dead imported string global\"\ntype record struct { Text string }\nvar AggregateLive = record{\"live imported aggregate string\"}\nvar AggregateDead = record{\"dead imported aggregate string\"}\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 			t.Fatal(err)
@@ -75,8 +76,8 @@ func TestLiteralInitLargePackage(t *testing.T) {
 		file    string
 		globals int
 	}{
-		{"main.go", 6000},
-		{"imported/imported.go", 2},
+		{"main.go", 6002},
+		{"imported/imported.go", 4},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(debugdir, "garbled", "example.com/large", tc.file), nil, 0)
@@ -94,8 +95,9 @@ func TestLiteralInitLargePackage(t *testing.T) {
 			if len(globals) < tc.globals {
 				t.Fatalf("transformed globals: got %d, want at least %d", len(globals), tc.globals)
 			}
-			// The fixture declares its live global first, then an ordinary dead global.
-			for i, global := range globals[:2] {
+			// Both the scalar and aggregate pairs declare the live global first.
+			for _, i := range []int{0, 1, tc.globals - 2, tc.globals - 1} {
+				global := globals[i]
 				if len(global.Names) != 1 || len(global.Values) != 1 {
 					t.Fatalf("unexpected global shape: %v", global)
 				}
@@ -114,7 +116,7 @@ func TestLiteralInitLargePackage(t *testing.T) {
 							found = true
 						}
 					}
-					if want := i == 0; found != want {
+					if want := i%2 == 0; found != want {
 						t.Errorf("symbol %s retained = %v, want %v", name, found, want)
 					}
 				}
@@ -160,6 +162,10 @@ func TestLiteralInitManifestCompiler(t *testing.T) {
 	// Match objabi.RelocType.IsDirectCall, never an indirect or weak call.
 	eagerFactoryCall := regexp.MustCompile(`(?m)\bt=(?:R_CALL(?:ARM|ARM64|LOONG64|MIPS|POWER)?|R_RISCV_(?:CALL|JAL|JAL_TRAMP)) p\.factory\+0$`)
 	for _, tc := range []struct{ name, data, diagnostic string }{
+		{"aggregate-array", `{"value":"factory"}`, ""},
+		{"aggregate-struct", `{"value":"factory"}`, ""},
+		{"aggregate-interface", `{"value":"factory"}`, "invalid certified literal initializer"},
+		{"aggregate-slice", `{"value":"factory"}`, "invalid certified literal initializer"},
 		{"large", string(data), ""},
 		{"large-moved", string(data), ""},
 		{"darwin-arm64-pic", string(data), ""},
@@ -187,6 +193,18 @@ func TestLiteralInitManifestCompiler(t *testing.T) {
 				}
 			}
 			input := source
+			if strings.HasPrefix(tc.name, "aggregate-") {
+				result := map[string]string{"aggregate-array": "[2]string", "aggregate-struct": "struct{ Text string }", "aggregate-interface": "any", "aggregate-slice": "[]string"}[tc.name]
+				body := result + "{}"
+				if result == "any" {
+					body = `"value"`
+				}
+				input = filepath.Join(dir, tc.name+".go")
+				text := "package p\nvar value = factory()\n//go:noinline\nfunc factory() " + result + " { return " + body + " }\n"
+				if err := os.WriteFile(input, []byte(text), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			linked := strings.HasPrefix(tc.name, "linkname")
 			if linked {
 				directive := "//go:linkname value sharedAliasReview"

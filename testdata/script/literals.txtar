@@ -58,7 +58,12 @@ import (
 	_ "test/main/b"
 )
 
-func main() { println(a.Value) }
+func main() {
+	println(a.Value)
+	if a.Aggregate[1] != "initialized owner of linked aggregate" {
+		panic("linknamed aggregate init removed")
+	}
+}
 -- a/p.go --
 package a
 
@@ -66,6 +71,9 @@ import _ "unsafe"
 
 //go:linkname Value sharedAliasReview
 var Value string
+
+//go:linkname Aggregate sharedAggregateReview
+var Aggregate [2]string
 -- b/p.go --
 package b
 
@@ -73,6 +81,9 @@ import _ "unsafe"
 
 //go:linkname Value sharedAliasReview
 var Value = "initialized owner of linked string"
+
+//go:linkname Aggregate sharedAggregateReview
+var Aggregate = [2]string{1: "initialized owner of linked aggregate"}
 -- alias.stderr --
 initialized owner of linked string
 -- plugin.go --
@@ -87,6 +98,19 @@ package main
 import "test/main/global_ref"
 
 var initEvents int
+
+type aggregateRecord struct {
+	Text   string
+	Count  int
+	Nested [2]string
+}
+
+var aggregate = aggregateRecord{Text: "an eagerly initialized aggregate", Count: 3, Nested: [2]string{1: "a nested aggregate string"}}
+var aggregateAddress = &aggregate
+var aggregateArray = [...]aggregateRecord{{"an array aggregate string", 4, [2]string{"nested array string", "short"}}}
+var deadAggregate = [2]string{"a dead array aggregate string", "another dead array string"}
+var deadRecord = aggregateRecord{Text: "a dead struct aggregate string"}
+var aggregateEffect = aggregateRecord{Text: literalGlobalFactory()}
 var addressed = "an addressable initialized literal"
 var addressBeforeUse = &addressed
 var scheduled = observeScheduled()
@@ -110,7 +134,14 @@ func literalGlobalFactory() string {
 }
 
 func init() {
-	if initEvents != 5 || scheduled != dependency || mixedConstant != "a mixed constant initializer" || mixedEffect != userFactory {
+	if aggregateAddress != &aggregate || aggregate.Text != "an eagerly initialized aggregate" || aggregate.Nested[1] != "a nested aggregate string" || aggregate.Count != 3 || aggregateArray[0].Count != 4 || aggregateArray[0].Text != "an array aggregate string" {
+		panic("aggregate address or eager initialization changed")
+	}
+	aggregateAddress.Nested[1] = "mutated aggregate field"
+	if aggregate.Nested[1] != "mutated aggregate field" || aggregateEffect.Text != userFactory {
+		panic("aggregate mutation or side effects changed")
+	}
+	if initEvents != 6 || scheduled != dependency || mixedConstant != "a mixed constant initializer" || mixedEffect != userFactory {
 		panic("literal initializer side effects changed")
 	}
 	if addressBeforeUse != &addressed || *addressBeforeUse != "an addressable initialized literal" {
